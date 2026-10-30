@@ -10,8 +10,9 @@ export const guardCommand = new SlashCommandBuilder()
   .setDMPermission(false)
   .addSubcommand((c) => c.setName('join').setDescription('Listen in your current voice channel')
     .addBooleanOption((o) => o.setName('stay').setDescription('Stay here instead of auto-following flagged users')))
-  .addSubcommand((c) => c.setName('leave').setDescription('Stop listening and leave voice'))
-  .addSubcommand((c) => c.setName('status').setDescription('Show where the bot is and current settings'))
+  .addSubcommand((c) => c.setName('leave').setDescription('All listeners leave voice and auto-follow pauses'))
+  .addSubcommand((c) => c.setName('resume').setDescription('Resume auto-follow after /guard leave'))
+  .addSubcommand((c) => c.setName('status').setDescription('Show where each listener is and current settings'))
   .addSubcommand((c) => c.setName('meter').setDescription('Loudness of each speaker over the last 10 s (for tuning)'))
   .addSubcommand((c) => c.setName('set').setDescription('Change settings')
     .addBooleanOption((o) => o.setName('enabled').setDescription('Turn auto-mute on/off'))
@@ -54,7 +55,7 @@ export function settingsText(s) {
 }
 
 export async function handleGuard(interaction, ctx) {
-  const { store, moderator, getMonitor } = ctx;
+  const { store, moderator, coord } = ctx;
   const guild = interaction.guild;
   const sub = interaction.options.getSubcommand();
   const reply = (content, extra = {}) => interaction.reply({ content, flags: MessageFlags.Ephemeral, ...extra });
@@ -66,25 +67,30 @@ export async function handleGuard(interaction, ctx) {
       if (!vc) return reply('Join a voice channel first, then run this.');
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       try {
-        await getMonitor(guild).join(vc, { pinned: interaction.options.getBoolean('stay') ?? false });
-        return interaction.editReply(`👂 Listening in ${vc}. Audio is analysed live and never recorded.`);
+        const mon = await coord.join(guild, vc, { pinned: interaction.options.getBoolean('stay') ?? false });
+        return interaction.editReply(`👂 Listener **${mon.id}** is in ${vc}. Audio is analysed live and never recorded.`);
       } catch (e) {
-        getMonitor(guild).leave();
+        coord.schedule(guild.id);
         return interaction.editReply(`Couldn't connect: ${e.message}. Check I have **Connect** + **View Channel** there.`);
       }
     }
     case 'leave':
-      getMonitor(guild).leave();
-      return reply('👋 Left voice.');
+      coord.leaveAll(guild.id);
+      return reply('👋 All listeners left voice. Auto-follow is paused until `/guard join` or `/guard resume`.');
+    case 'resume':
+      coord.resume(guild.id);
+      return reply('▶️ Auto-follow resumed.');
     case 'status': {
-      const m = getMonitor(guild);
-      return reply(`**Listening in:** ${ch(m.channelId)}${m.pinned ? ' (stay)' : ''}\n${settingsText(store.settings(guild.id))}`);
+      const slots = coord.status(guild.id);
+      const lines = slots.map((m) => `\`${m.id}\` → ${m.channelId ? ch(m.channelId) : '*idle*'}${m.pinned ? ' (stay)' : ''}`);
+      const paused = coord.paused.has(guild.id) ? ' *(auto-follow paused)*' : '';
+      return reply(`**Listeners (${slots.length})**${paused}\n${lines.join('\n')}\n\n${settingsText(store.settings(guild.id))}`);
     }
     case 'meter': {
-      const rows = getMonitor(guild).meter();
-      if (!rows.length) return reply('No one has spoken in my channel in the last 10 s.');
+      const rows = coord.meter(guild.id);
+      if (!rows.length) return reply('No one has spoken in any watched channel in the last 10 s.');
       const s = store.settings(guild.id);
-      const lines = rows.map((r) => `<@${r.userId}> — loudest **${r.maxDb.toFixed(1)}** dBFS, avg ${r.avgDb.toFixed(1)}${r.maxDb >= s.thresholdDb ? ' ⚠️' : ''}`);
+      const lines = rows.map((r) => `<@${r.userId}> in ${ch(r.channelId)}: loudest **${r.maxDb.toFixed(1)}** dBFS, avg ${r.avgDb.toFixed(1)}${r.maxDb >= s.thresholdDb ? ' ⚠️' : ''}`);
       return reply(`Threshold is **${s.thresholdDb} dBFS**.\n${lines.join('\n')}`);
     }
     case 'set': {
@@ -99,7 +105,7 @@ export async function handleGuard(interaction, ctx) {
       if (role) patch.exemptRoleId = role.id;
       if (!Object.keys(patch).length) return reply(settingsText(store.settings(guild.id)));
       const s = store.updateSettings(guild.id, patch);
-      getMonitor(guild).applySettings();
+      coord.applySettings(guild.id);
       return reply(`✅ Updated.\n${settingsText(s)}`);
     }
     case 'incidents': {

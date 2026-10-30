@@ -1,6 +1,6 @@
 {
   "name": "loudguard",
-  "version": "0.1.0-beta",
+  "version": "0.2.0-beta",
   "description": "Discord bot that auto-mutes earrape and tracks voice-channel hoppers",
   "main": "index.js",
   "directories": {

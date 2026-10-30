@@ -1,5 +1,7 @@
-// GuildMonitor: sits in one voice channel per server, listens to every speaker,
-// and runs each person's audio through their own LoudnessDetector.
+// GuildMonitor: one "listener slot", meaning one bot account (main or worker) in one server.
+// It sits in one voice channel, listens to every speaker, and runs each person's
+// audio through their own LoudnessDetector. Triggers go to onTrigger. The main bot
+// does the actual muting, so worker bots only need Connect permission.
 import {
   joinVoiceChannel, entersState, VoiceConnectionStatus, EndBehaviorType, getVoiceConnection,
 } from '@discordjs/voice';
@@ -7,10 +9,11 @@ import prism from 'prism-media';
 import { LoudnessDetector, SAMPLE_RATE, CHANNELS } from './analyzer.js';
 
 export class GuildMonitor {
-  constructor({ guild, store, moderator, onDisconnect }) {
-    this.guild = guild;
+  constructor({ id, guild, store, onTrigger, onDisconnect }) {
+    this.id = id; // 'main' or 'w1', 'w2', ...
+    this.guild = guild; // this bot account's view of the server
     this.store = store;
-    this.moderator = moderator;
+    this.onTrigger = onTrigger;
     this.onDisconnect = onDisconnect;
     this.connection = null;
     this.channelId = null;
@@ -47,7 +50,7 @@ export class GuildMonitor {
       // Already connected in this server: just move channels.
       this.connection.rejoin({ channelId: channel.id, selfDeaf: false, selfMute: true });
       await entersState(this.connection, VoiceConnectionStatus.Ready, 20_000);
-      console.log(`[voice] moved to #${channel.name} (${this.guild.name})`);
+      console.log(`[voice:${this.id}] moved to #${channel.name} (${this.guild.name})`);
       return;
     }
 
@@ -77,7 +80,7 @@ export class GuildMonitor {
 
     await entersState(conn, VoiceConnectionStatus.Ready, 20_000);
     conn.receiver.speaking.on('start', (userId) => this.subscribe(userId));
-    console.log(`[voice] listening in #${channel.name} (${this.guild.name})`);
+    console.log(`[voice:${this.id}] listening in #${channel.name} (${this.guild.name})`);
   }
 
   subscribe(userId) {
@@ -105,7 +108,7 @@ export class GuildMonitor {
     pcm.on('data', (chunk) => {
       if (!this.store.settings(this.guild.id).enabled) return;
       for (const trig of detector.push(chunk)) {
-        this.moderator.punish(this.guild, userId, channelId, trig).catch((e) => console.warn('[punish]', e.message));
+        Promise.resolve(this.onTrigger(userId, channelId, trig)).catch((e) => console.warn('[punish]', e.message));
       }
     });
     opus.pipe(pcm);

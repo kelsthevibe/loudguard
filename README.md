@@ -1,4 +1,6 @@
-# LoudGuard (beta 0.1)
+# LoudGuard (beta 0.2)
+
+[![tests](https://github.com/kelsthevibe/loudguard/actions/workflows/test.yml/badge.svg)](https://github.com/kelsthevibe/loudguard/actions/workflows/test.yml)
 
 A Discord bot that **auto-mutes people blasting earrape** and **tracks trolls hopping between voice channels**.
 
@@ -7,6 +9,7 @@ A Discord bot that **auto-mutes people blasting earrape** and **tracks trolls ho
 - 📈 Escalates: 30 s mute → 2 min mute → 10 min timeout (strikes reset after 1 h)
 - 🦘 Flags channel hoppers (5+ joins in 2 min) across **every** voice channel in the server
 - 👁️ Auto-follows flagged users into whatever channel they join next
+- 🤖 **Worker bots**: add extra bot accounts to listen in several channels at once
 - 📋 Logs everything to a mod channel; `/guard trail` shows where someone has been
 
 ---
@@ -54,6 +57,30 @@ You should see:
 
 Then have a friend play something loud and check `#mod-log`.
 
+## 4. (Optional) Add worker bots for more channels
+
+Discord lets one bot account sit in **one voice channel per server**. Each worker bot covers one more channel.
+
+1. Make another application in the Developer Portal (https://discord.com/developers/applications), for example "LoudGuard Ear 1", and copy its bot token.
+2. Invite it with listen-only permissions (View Channels + Connect). Use the worker's own Application ID:
+   ```
+   https://discord.com/oauth2/authorize?client_id=WORKER_APP_ID&scope=bot&permissions=1049600
+   ```
+3. Add its token to `.env`. For several workers, separate the tokens with commas:
+   ```
+   WORKER_TOKENS=token-of-worker-1,token-of-worker-2
+   ```
+4. Restart. `/guard status` should now list `main`, `w1`, `w2`, ...
+
+Workers only **listen**. When one hears earrape it reports to the main bot, which does the muting, so workers never need moderation permissions.
+
+**How listeners get assigned** (`src/planner.js`):
+1. A listener pinned with `/guard join stay:true` never moves.
+2. A listener in a channel that still has people stays put, so bots don't bounce around.
+3. Free listeners go to uncovered channels: channels with flagged users first, then the busiest.
+4. If a flagged user is in an uncovered channel and every listener is busy, the bot pulls a listener from the smallest channel that has no flagged users.
+5. Idle listeners in empty channels leave.
+
 ## Commands
 
 All commands are only visible to members with **Mute Members** by default.
@@ -61,8 +88,9 @@ All commands are only visible to members with **Mute Members** by default.
 | Command | What it does |
 |---|---|
 | `/guard join [stay]` | Listen in your voice channel. `stay:true` stops it auto-following elsewhere. |
-| `/guard leave` | Leave voice |
-| `/guard status` | Where it's listening + all settings |
+| `/guard leave` | All listeners leave and auto-follow pauses |
+| `/guard resume` | Resume auto-follow |
+| `/guard status` | Where every listener is + all settings |
 | `/guard meter` | Loudness of each speaker over the last 10 s. **Use this to tune.** |
 | `/guard set ...` | Change any setting (see below) |
 | `/guard incidents [user]` | Recent auto-mutes |
@@ -80,7 +108,7 @@ All commands are only visible to members with **Mute Members** by default.
 | `escalate` | `true` | Turn the strike ladder off and every offence is just `mute_seconds` |
 | `timeout_minutes` | `10` | Timeout on the 3rd strike within an hour |
 | `hop_limit` / `hop_window_sec` | `5` / `120` | Joins within the window that count as channel hopping |
-| `auto_follow` | `true` | Bot moves to wherever flagged users go, and sits in the busiest channel when idle |
+| `auto_follow` | `true` | Listeners move automatically: flagged users' channels first, then the busiest |
 | `exempt_role` | — | Never auto-muted (admins are always exempt) |
 
 **Test with real clips before going live**, no Discord needed (requires ffmpeg → https://ffmpeg.org/download.html):
@@ -93,8 +121,19 @@ npm run calibrate -- loud-friend.wav -12 1000  # try threshold -12, trigger 1000
 It prints a loudness bar for each second and tells you whether the clip would be muted.
 
 ```bash
-npm test     # 11 tests: speech, laughs, earrape, pulsing earrape, hopping, strikes
+npm test     # 25 tests: detector, hopping, strikes, listener planner, coordinator
 ```
+
+## Hosting 24/7
+
+The bot only runs while `npm start` is running. To keep it online:
+
+- **Docker** (any VPS, e.g. Oracle Cloud free tier, or a Raspberry Pi 4/5):
+  ```bash
+  docker build -t loudguard .
+  docker run -d --name loudguard --restart unless-stopped --env-file .env -v loudguard-data:/app/data loudguard
+  ```
+- **Without Docker:** `npm install -g pm2 && pm2 start src/index.js --name loudguard && pm2 save` (pm2: https://pm2.keymetrics.io)
 
 ## How it works
 
@@ -115,7 +154,7 @@ voiceStateUpdate (every channel) ─► movement log + hop counter ─► flag �
 
 ## Known beta limitations
 
-- **One channel at a time per server.** That's a Discord rule for bots. Hop tracking covers every channel, but audio is only checked where the bot is sitting. Auto-follow puts it where trouble is most likely. For full coverage of big servers, the next step is several "worker" bot accounts.
+- **One channel per bot account.** Hop tracking covers every channel, but audio is only checked where a listener is sitting. Add worker bots (step 4) until you have as many listeners as busy channels.
 - Loudness is measured on what the person *sends*. Your personal volume slider for them doesn't affect it.
 - Data (settings, incidents, movement logs) lives in `data/loudguard.db`. Movement logs and flags are deleted after 7 days.
 - Only tracks inside servers the bot is in. It doesn't share data between servers.
@@ -127,7 +166,9 @@ voiceStateUpdate (every channel) ─► movement log + hop counter ─► flag �
 src/analyzer.js    loudness math + leaky-bucket detector (pure, tested)
 src/tracker.js     channel-hop counter
 src/store.js       SQLite: settings, incidents, voice log, flags, suspicion
-src/voice.js       joins voice, subscribes to each speaker, decodes audio
+src/voice.js       one listener: joins voice, subscribes to each speaker, decodes audio
+src/planner.js     which listener goes to which channel (pure, tested)
+src/coordinator.js runs the planner across main + worker bots
 src/moderation.js  strike ladder, mute/unmute/timeout, mod-log embeds
 src/commands.js    /guard slash commands
 src/index.js       wires it all together
