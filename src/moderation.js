@@ -75,13 +75,26 @@ export class Moderator {
     }
   }
 
+  /** Mute from a mod's button click. Lifted automatically like any other LoudGuard mute. */
+  async muteFor(guild, member, seconds, { modTag, caseId, channelId }) {
+    if (!member.voice.channelId) throw new Error('they are not in voice right now');
+    await member.voice.setMute(true, `LoudGuard case #${caseId}: muted by ${modTag}`);
+    this.store.addIncident({
+      guildId: guild.id, userId: member.id, channelId, ts: Date.now(),
+      action: `mod: muted ${seconds}s (case #${caseId}, ${modTag})`, muteUntil: Date.now() + seconds * 1000,
+    });
+    this.scheduleUnmute(guild, member.id, seconds * 1000);
+  }
+
   scheduleUnmute(guild, userId, ms) {
     const key = `${guild.id}:${userId}`;
     clearTimeout(this.timers.get(key));
-    this.timers.set(key, setTimeout(() => {
+    const t = setTimeout(() => {
       this.timers.delete(key);
       this.liftIfExpired(guild, userId).catch(() => {});
-    }, ms));
+    }, ms);
+    t.unref?.(); // don't keep the process alive just for this
+    this.timers.set(key, t);
   }
 
   /**

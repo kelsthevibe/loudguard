@@ -10,11 +10,13 @@ export class Coordinator {
    * @param {import('discord.js').Client} o.main       the main bot (has Mute/Timeout perms, owns commands)
    * @param {import('discord.js').Client[]} o.workers  extra bot accounts that only listen
    */
-  constructor({ main, workers = [], store, moderator }) {
+  constructor({ main, workers = [], store, moderator, onTrigger }) {
     this.main = main;
     this.accounts = [{ id: 'main', client: main }, ...workers.map((client, i) => ({ id: `w${i + 1}`, client }))];
     this.store = store;
     this.moderator = moderator;
+    // What to do when any listener hears something too loud: open a case (flag mode) or mute (auto mode)
+    this.handleTrigger = onTrigger ?? ((guild, userId, channelId, trig) => moderator.punish(guild, userId, channelId, trig));
     this.slots = new Map(); // guildId -> Map(slotId -> GuildMonitor)
     this.paused = new Set(); // guilds where a mod ran /guard leave
     this.timers = new Map();
@@ -37,9 +39,9 @@ export class Coordinator {
         guild,
         store: this.store,
         onTrigger: (userId, channelId, trig) => {
-          // Always punish through the MAIN bot: it's the one with Mute/Timeout permissions.
+          // Always act through the MAIN bot: it has the permissions and posts the messages.
           const mainGuild = this.main.guilds.cache.get(guildId);
-          return mainGuild && this.moderator.punish(mainGuild, userId, channelId, trig);
+          return mainGuild && this.handleTrigger(mainGuild, userId, channelId, trig);
         },
         onDisconnect: () => this.schedule(guildId, 2000),
       }));

@@ -1,7 +1,7 @@
 {
   "name": "loudguard",
-  "version": "0.2.0-beta",
-  "description": "Discord bot that auto-mutes earrape and tracks voice-channel hoppers",
+  "version": "0.3.0-beta",
+  "description": "Discord bot that flags voice-chat trolls and earrape, runs weighted community votes, and sends confirmed cases to human mods",
   "main": "index.js",
   "directories": {
     "test": "test"

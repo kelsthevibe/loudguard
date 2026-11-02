@@ -24,8 +24,8 @@ function setup(spec, settings = {}) {
   store.updateSettings('g', settings);
   const logs = [];
   const punished = [];
-  const moderator = { log: async (_g, e) => logs.push(e), punish: async (g, u) => punished.push([g, u]) };
-  const coord = new Coordinator({ main, workers, store, moderator });
+  const moderator = { log: async (_g, e) => logs.push(e) };
+  const coord = new Coordinator({ main, workers, store, moderator, onTrigger: async (g, u) => punished.push([g, u]) });
   // Replace real voice joins with bookkeeping
   for (const mon of coord.slotsFor('g').values()) {
     mon.join = async (vc, { pinned = false } = {}) => { mon.channelId = vc.id; mon.pinned = pinned; mon.connection = {}; };
@@ -67,7 +67,7 @@ test('/guard leave pauses everything until resume', async () => {
   assert.ok(Object.values(where(coord)).includes('a'));
 });
 
-test('a worker trigger is punished through the MAIN bot', async () => {
+test('a worker trigger is handled through the MAIN bot', async () => {
   const { coord, punished, main } = setup([['a', ['u1']]]);
   const w1 = coord.slotsFor('g').get('w1');
   await w1.onTrigger('u1', 'a', { avgDb: -1, peakDb: 0, clipRatio: 0.5, loudMs: 1000 });
